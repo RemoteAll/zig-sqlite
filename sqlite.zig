@@ -261,14 +261,14 @@ pub const Diagnostics = struct {
     message: []const u8 = "",
     err: ?DetailedError = null,
 
-    pub fn format(self: @This(), writer: anytype) !void {
+    pub fn format(self: @This(), comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
         if (self.err) |err| {
             if (self.message.len > 0) {
-                _ = try writer.print("{{message: {s}, detailed error: {f}}}", .{ self.message, err });
+                _ = try writer.print("{{message: {s}, detailed error: {}}}", .{ self.message, err });
                 return;
             }
 
-            _ = try err.format(writer);
+            _ = try std.fmt.format(writer, "{}", .{err});
             return;
         }
 
@@ -1967,12 +1967,13 @@ pub const DynamicStatement = struct {
     pub fn all(self: *Self, comptime Type: type, allocator: mem.Allocator, options: QueryOptions, values: anytype) ![]Type {
         var iter = try self.iteratorAlloc(Type, allocator, values);
 
-        var rows: std.ArrayList(Type) = .{};
+        var rows = std.ArrayList(Type).init(allocator);
+        defer rows.deinit();
         while (try iter.nextAlloc(allocator, options)) |row| {
             try rows.append(row);
         }
 
-        return rows.toOwnedSlice();
+        return try rows.toOwnedSlice();
     }
 };
 
@@ -2257,12 +2258,13 @@ pub fn Statement(comptime opts: StatementOptions, comptime query: anytype) type 
         pub fn all(self: *Self, comptime Type: type, allocator: mem.Allocator, options: QueryOptions, values: anytype) ![]Type {
             var iter = try self.iteratorAlloc(Type, allocator, values);
 
-            var rows: std.ArrayList(Type) = .{};
+            var rows = std.ArrayList(Type).init(allocator);
+            defer rows.deinit();
             while (try iter.nextAlloc(allocator, options)) |row| {
-                try rows.append(allocator, row);
+                try rows.append(row);
             }
 
-            return rows.toOwnedSlice(allocator);
+            return try rows.toOwnedSlice();
         }
     };
 }
@@ -3020,13 +3022,19 @@ test "sqlite: statement iterator" {
     var stmt = try db.prepare("INSERT INTO user(name, id, age, weight, favorite_color) VALUES(?{[]const u8}, ?{usize}, ?{usize}, ?{f32}, ?{[]const u8})");
     defer stmt.deinit();
 
-    var expected_rows: std.ArrayList(TestUser) = .{};
+    var expected_rows = std.ArrayList(TestUser).init(allocator);
+    defer {
+        for (expected_rows.items) |row| {
+            allocator.free(row.name);
+        }
+        expected_rows.deinit();
+    }
     var i: usize = 0;
     while (i < 20) : (i += 1) {
         const name = try std.fmt.allocPrint(allocator, "Vincent {d}", .{i});
         const user = TestUser{ .id = i, .name = name, .age = i + 200, .weight = @floatFromInt(i + 200), .favorite_color = .indigo };
 
-        try expected_rows.append(allocator, user);
+        try expected_rows.append(user);
 
         stmt.reset();
         try stmt.exec(.{}, user);
@@ -3047,9 +3055,10 @@ test "sqlite: statement iterator" {
 
         var iter = try stmt2.iterator(RowType, .{});
 
-        var rows: std.ArrayList(RowType) = .{};
+        var rows = std.ArrayList(RowType).init(allocator);
+        defer rows.deinit();
         while (try iter.next(.{})) |row| {
-            try rows.append(allocator, row);
+            try rows.append(row);
         }
 
         // Check the data
@@ -3074,9 +3083,15 @@ test "sqlite: statement iterator" {
 
         var iter = try stmt2.iterator(RowType, .{});
 
-        var rows: std.ArrayList(RowType) = .{};
+        var rows = std.ArrayList(RowType).init(allocator);
+        defer {
+            for (rows.items) |row| {
+                allocator.free(row.name.data);
+            }
+            rows.deinit();
+        }
         while (try iter.nextAlloc(allocator, .{})) |row| {
-            try rows.append(allocator, row);
+            try rows.append(row);
         }
 
         // Check the data
@@ -3459,10 +3474,10 @@ test "sqlite: bind runtime slice" {
     const allocator = arena.allocator();
 
     // creating array list on heap so that it's deemed runtime size
-    var list: std.ArrayList([]const u8) = .{};
-    defer list.deinit(allocator);
-    try list.append(allocator, "this is some data");
-    const args = try list.toOwnedSlice(allocator);
+    var list = std.ArrayList([]const u8).init(allocator);
+    defer list.deinit();
+    try list.append("this is some data");
+    const args = try list.toOwnedSlice();
 
     var db = try getTestDb();
     defer db.deinit();
@@ -3877,8 +3892,8 @@ test "sqlite: empty slice" {
     defer db.deinit();
     try addTestData(&db);
 
-    var list: std.ArrayList(u8) = .{};
-    const ptr = try list.toOwnedSlice(allocator);
+    var list = std.ArrayList(u8).init(allocator);
+    const ptr = try list.toOwnedSlice();
 
     try db.exec("INSERT INTO article(author_id, data) VALUES(?, ?)", .{}, .{ 1, ptr });
 

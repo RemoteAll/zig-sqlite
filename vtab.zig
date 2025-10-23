@@ -50,7 +50,7 @@ pub const VTabDiagnostics = struct {
     error_message: []const u8 = "unknown error",
 
     pub fn setErrorMessage(self: *Self, comptime format_string: []const u8, values: anytype) void {
-        self.error_message = fmt.allocPrintSentinel(self.allocator, format_string, values, 0) catch |err| switch (err) {
+        self.error_message = fmt.allocPrintZ(self.allocator, format_string, values) catch |err| switch (err) {
             error.OutOfMemory => "can't set diagnostic message, out of memory",
         };
     }
@@ -210,7 +210,7 @@ pub const BestIndexBuilder = struct {
         const res = Self{
             .allocator = allocator,
             .index_info = index_info,
-            .id_str_buffer = .empty,
+            .id_str_buffer = std.ArrayList(u8).init(allocator),
             .constraints = try allocator.alloc(Constraint, @intCast(index_info.nConstraint)),
             .columns_used = @intCast(index_info.colUsed),
             .id = .{},
@@ -1070,7 +1070,7 @@ const TestVirtualTable = struct {
         _ = self;
         _ = diags;
 
-        var id_str_writer = builder.id_str_buffer.writer(builder.allocator);
+        var id_str_writer = builder.id_str_buffer.writer();
 
         var argv_index: i32 = 0;
         for (builder.constraints) |*constraint| {
@@ -1084,7 +1084,7 @@ const TestVirtualTable = struct {
 
         //
 
-        builder.id.str = try builder.id_str_buffer.toOwnedSlice(builder.allocator);
+        builder.id.str = try builder.id_str_buffer.toOwnedSlice();
         builder.estimated_cost = 200;
         builder.estimated_rows = 200;
 
@@ -1297,7 +1297,7 @@ test "parse module arguments" {
 
     const args = try allocator.alloc([*c]const u8, 20);
     for (args, 0..) |*arg, i| {
-        const tmp = try fmt.allocPrintSentinel(allocator, "arg={d}", .{i}, 0);
+        const tmp = try fmt.allocPrintZ(allocator, "arg={d}", .{i});
         arg.* = @ptrCast(tmp);
     }
 
